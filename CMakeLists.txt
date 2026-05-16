@@ -19,7 +19,7 @@ if(NOT nlohmann_json_FOUND)
 endif()
 
 # Add the executable
-add_executable(tse_mbo_processor main.cpp)
+add_executable(tse_mbo_processor main.cpp app.cpp)
 
 # Link libraries
 target_link_libraries(tse_mbo_processor PRIVATE ${LIBPCAP_LIBRARIES})
