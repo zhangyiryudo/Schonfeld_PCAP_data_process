@@ -45,16 +45,48 @@ public:
 
     void modifyOrder(uint64_t orderId, uint64_t newQty) {
         auto it = orders.find(orderId);
-        if (it != orders.end()) {
-            uint64_t oldQty = it->second.qty;
-            if (it->second.side == 'B') {
-                buyLevels[it->second.price] = (buyLevels[it->second.price] >= oldQty) ? 
-                    (buyLevels[it->second.price] - oldQty + newQty) : newQty;
+        if (it == orders.end()) {
+            return;
+        }
+
+        uint64_t oldQty = it->second.qty;
+        if (oldQty == newQty) {
+            return;
+        }
+
+        auto& levels = (it->second.side == 'B') ? buyLevels : sellLevels;
+        uint64_t price = it->second.price;
+
+        if (levels.count(price)) {
+            uint64_t currentLevelQty = levels[price];
+            if (currentLevelQty >= oldQty) {
+                levels[price] = currentLevelQty - oldQty + newQty;
             } else {
-                sellLevels[it->second.price] = (sellLevels[it->second.price] >= oldQty) ? 
-                    (sellLevels[it->second.price] - oldQty + newQty) : newQty;
+                levels[price] = newQty;
             }
+
+            if (levels[price] == 0) {
+                levels.erase(price);
+            }
+        }
+
+        if (newQty == 0) {
+            orders.erase(it);
+        } else {
             it->second.qty = newQty;
+        }
+    }
+
+    void reduceOrder(uint64_t orderId, uint64_t reduceQty) {
+        auto it = orders.find(orderId);
+        if (it == orders.end()) {
+            return;
+        }
+
+        if (reduceQty >= it->second.qty) {
+            deleteOrder(orderId);
+        } else {
+            modifyOrder(orderId, it->second.qty - reduceQty);
         }
     }
 

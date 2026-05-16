@@ -25,7 +25,6 @@ struct InstrumentMetadata {
 struct AppState {
     std::unordered_map<std::string, InstrumentMetadata> targetInstruments;
     std::unordered_map<std::string, OrderBook> orderBooks;
-    std::vector<std::string> instrumentSymbols;
 };
 
 enum class ExitCode {

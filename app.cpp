@@ -38,36 +38,111 @@ bool loadVenueMetadata(const std::string& jsonPath, AppState& state) {
             inst.value("tickSizeTable", 1),
             inst.value("unitOfTrading", 100)
         };
-        state.orderBooks[symbol] = OrderBook();
-        state.instrumentSymbols.push_back(symbol);
+        state.orderBooks.emplace(symbol, OrderBook());
     }
 
     std::cout << "Loaded " << state.targetInstruments.size() << " valid instruments." << std::endl;
     return true;
 }
 
+static uint16_t readUint16(const u_char* data) {
+    return static_cast<uint16_t>(data[0]) << 8 | static_cast<uint16_t>(data[1]);
+}
+
+static uint32_t readUint32(const u_char* data) {
+    return static_cast<uint32_t>(data[0]) << 24 |
+           static_cast<uint32_t>(data[1]) << 16 |
+           static_cast<uint32_t>(data[2]) << 8 |
+           static_cast<uint32_t>(data[3]);
+}
+
+static uint64_t readUint64(const u_char* data) {
+    return (static_cast<uint64_t>(readUint32(data)) << 32) |
+           static_cast<uint64_t>(readUint32(data + 4));
+}
+
+static std::string extractInstrumentSymbol(const u_char* data, int len) {
+    if (len < 10) return {};
+    std::string symbol(reinterpret_cast<const char*>(data + 5), 5);
+    while (!symbol.empty() && symbol.back() == ' ') {
+        symbol.pop_back();
+    }
+    return symbol;
+}
+
+static void processAddEvent(const u_char* value, int valueLen, OrderBook& book) {
+    if (valueLen < 25) return;
+
+    uint64_t orderId = readUint32(value);
+    uint64_t price = readUint32(value + 4);
+    char side = static_cast<char>(value[8]);
+    uint64_t qty = readUint16(value + 13);
+
+    if (qty == 0 || (side != 'B' && side != 'S')) {
+        return;
+    }
+
+    book.addOrder(orderId, side, price, qty);
+}
+
+static void processReduceEvent(const u_char* value, int valueLen, OrderBook& book) {
+    if (valueLen < 10) return;
+
+    uint64_t orderId = readUint32(value);
+    uint64_t qty = readUint32(value + 4);
+
+    if (qty == 0) {
+        book.deleteOrder(orderId);
+    } else {
+        book.reduceOrder(orderId, qty);
+    }
+}
+
+static void processModifyEvent(const u_char* value, int valueLen, OrderBook& book) {
+    if (valueLen < 10) return;
+    uint64_t orderId = readUint32(value);
+    uint64_t newQty = readUint32(value + 4);
+    book.modifyOrder(orderId, newQty);
+}
+
 void parseTSEFlexMessage(const u_char* data, int len, AppState& state) {
     if (len < 26) return;
 
-    try {
-        if (len < 20) return;
+    std::string symbol = extractInstrumentSymbol(data, len);
+    if (symbol.empty()) return;
 
-        uint16_t instrRef = (data[16] << 8) | data[17];
-        if (instrRef >= state.instrumentSymbols.size()) return;
+    auto bookIt = state.orderBooks.find(symbol);
+    if (bookIt == state.orderBooks.end()) return;
 
-        const std::string& symbol = state.instrumentSymbols[instrRef];
-        auto bookIt = state.orderBooks.find(symbol);
-        if (bookIt == state.orderBooks.end()) return;
+    int offset = 26;
+    while (offset + 1 < len) {
+        uint8_t blockLen = data[offset];
+        if (blockLen == 0 || offset + 1 + blockLen > len) {
+            break;
+        }
 
-        uint32_t seqNum = (data[1] << 24) | (data[2] << 16) | (data[3] << 8) | data[4];
-        uint64_t orderId = seqNum;
-        char side = (seqNum % 2 == 0) ? 'B' : 'S';
-        uint64_t price = 1000 + (seqNum % 500);
-        uint64_t qty = 100 + (seqNum % 200);
+        char tag = static_cast<char>(data[offset + 1]);
+        const u_char* value = data + offset + 2;
+        int valueLen = blockLen - 1;
 
-        bookIt->second.addOrder(orderId, side, price, qty);
-    } catch (...) {
-        std::cerr << "Warning: malformed TSE FLEX message skipped." << std::endl;
+        switch (tag) {
+            case 'A':
+                processAddEvent(value, valueLen, bookIt->second);
+                break;
+            case 'D':
+                processReduceEvent(value, valueLen, bookIt->second);
+                break;
+            case 'C':
+                processModifyEvent(value, valueLen, bookIt->second);
+                break;
+            case 'E':
+                processReduceEvent(value, valueLen, bookIt->second);
+                break;
+            default:
+                break;
+        }
+
+        offset += 1 + blockLen;
     }
 }
 
